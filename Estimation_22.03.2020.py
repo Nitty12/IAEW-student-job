@@ -183,7 +183,7 @@ def saveArrays(xs = None, wls_xs = None, real_xs = None):
 
 
 # Plots the error distribution of WLS and EKF estimates
-def plotError(real, wls, xs):
+def plotError(alg, real, wls, xs):
     nBusAct = int(real.shape[1]/2)
     nBus = int(xs.shape[1]/2)
     nSim = xs.shape[0]
@@ -221,7 +221,7 @@ def plotError(real, wls, xs):
     # Plotting the errors
     plt.rcParams['figure.figsize'] = [15, 10]
     bins = np.arange(-3,3,.05)
-    plt.hist([xs_e.ravel(),wls_xs_e.ravel()], bins=bins, color = ['g','b'], alpha =0.6, label = ['IEKF','WLS']);
+    plt.hist([xs_e.ravel(),wls_xs_e.ravel()], bins=bins, color = ['g','b'], alpha =0.6, label = [alg,'WLS']);
     plt.xlabel('% relative error');
     plt.ylabel('counts');
     plt.legend();
@@ -229,10 +229,10 @@ def plotError(real, wls, xs):
 
 
 # Plotting the estimated and real values of a particular state variable to see the error per timesteps
-def plotStates(num, time_steps, xs, real_xs, wls_xs):
+def plotStates(alg, num, time_steps, xs, real_xs, wls_xs):
     # eg in case of 15 bus, 0 - 14 are bus voltage angles and 15- 29 are voltage magnitudes 
     plt.rcParams['figure.figsize'] = [15, 10]
-    plt.plot(time_steps[:], xs[0,num,:],'r', label='EKF');
+    plt.plot(time_steps[:], xs[0,num,:],'r', label=alg);
     plt.plot(time_steps[:], real_xs[0,num,:], 'b', label='Real');
     plt.plot(time_steps[:], wls_xs[0,num,:], 'g', label='WLS');
     plt.xlabel('time steps');
@@ -285,6 +285,8 @@ def estimate_EKF(dk, net, eppci, nBus, slackbus, nUpdates, s, ts):
             returnVal = -2
             break
 
+
+
         # subtracting the angle of slack bus from all bus angles after correction
         dk.x[:nBus] = dk.x[:nBus] - dk.x[slackbus]
         threshold = np.abs(np.sum(dk.x_new - dk.x_old) / (2 * nBus))
@@ -325,7 +327,7 @@ def estimate_UKF(ukf, net, eppci, nBus, slackbus, s, ts):
 
 def UKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus):
     # sigma points
-    sigmas = MerweScaledSigmaPoints(2*nBus, alpha=.1, beta=2., kappa=0)
+    sigmas = MerweScaledSigmaPoints(2*nBus, alpha=.1, beta=2., kappa=3-(2*nBus))
     ukf = UnscentedKalmanFilter(dim_x=2 * nBus, dim_z=nMeas, hx=create_hx, fx=stateTransUKF, points=sigmas)
     # measurement noise, R
     R = (std_pq ** 2) * np.eye(nMeas)
@@ -349,7 +351,7 @@ def stateTransUKF(x, nBus):
 
 
 # Run the estimation of states according the given profile for the given number of times
-def runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask):
+def runSimulations(alg, nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask):
     # measurement collection dictionaries to save the bus and line power measurements in first run
     # so that we dont need to run powerflow next run onwards
     bus_dict = {}
@@ -417,8 +419,8 @@ def runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bu
 
 
 # Retrieving sample grid from simbench
-# some example grid codes "1-MV-comm--0-sw", "1-LV-rural3--0-sw"
-sb_code = "	1-MV-urban--0-sw"
+# some example grid codes "1-MV-comm--0-sw", "1-LV-rural3--0-sw", "1-MV-urban--0-sw"
+sb_code = "1-LV-rural3--0-sw"
 net = sb.get_simbench_net(sb_code)
 # in simbench sgen is positive for generation but in pandapower sgen is negative for generation
 # converting positive value to negative for use in pandapower
@@ -451,13 +453,15 @@ time_steps = range(50)
 resultMask = createResultMask(net, nBus, nBusAct)
 
 # Run the required number of estimations and save the array locally
-xs, real_xs, wls_xs, nUpdates = runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask)
-saveArrays(xs = xs, wls_xs = wls_xs, real_xs = real_xs)
+# select between EKF and UKF
+alg = "UKF"
+xs, real_xs, wls_xs, nUpdates = runSimulations(alg, nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask)
+# saveArrays(xs = xs, wls_xs = wls_xs, real_xs = real_xs)
 
-# Plotting the estimated and real values of a particular state variable
-plotStates(8, time_steps, xs, real_xs, wls_xs)
-# Plotting the relative error of estimated values
-plotError(real_xs, wls_xs, xs)
+# # Plotting the estimated and real values of a particular state variable
+plotStates(alg, 8, time_steps, xs, real_xs, wls_xs)
+# # Plotting the relative error of estimated values
+# plotError(alg, real_xs, wls_xs, xs)
 
 # # loading locally saved arrays and plotting
 # real_xs = np.loadtxt('real_xs.txt')
