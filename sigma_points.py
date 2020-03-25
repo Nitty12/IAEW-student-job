@@ -177,7 +177,6 @@ class MerweScaledSigmaPoints(object):
         if num >0:
             P = v @ np.diag(w) @ np.linalg.inv(v)
 
-
         U = self.sqrt((lambda_ + n)*P)
 
         sigmas = np.zeros((2*n+1, n))

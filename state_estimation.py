@@ -7,11 +7,12 @@ from pandapower.estimation.results import eppci2pp
 from pandapower.estimation import estimate
 from ppc_conversion import PQ_indices
 import filterpy
-from filterpy.kalman import MerweScaledSigmaPoints
-from filterpy.kalman import UnscentedKalmanFilter
+from sigma_points import MerweScaledSigmaPoints
+from UKF import UnscentedKalmanFilter
 from EKF_iter import ExtendedKalmanFilter
 import simbench as sb
 import numpy as np
+import scipy
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -35,7 +36,7 @@ np.random.seed(0)
 def find_state_and_measurements(resultMask):
     # running power flow to know the state of the network to later compare with the estimation  result
     pp.runpp(net)
-    
+
     # real state at this timestep of the load profile
     real_va_degrees = net.res_bus[resultMask].loc[:, ['va_degree']].values
     real_vm_pu = net.res_bus[resultMask].loc[:, ['vm_pu']].values
@@ -46,7 +47,7 @@ def find_state_and_measurements(resultMask):
 
     # line measurements at this timestep of the load profil
     line_meas = net.res_line.loc[:, ['p_from_mw', 'q_from_mvar']]
-    
+
     return real_state, bus_meas, line_meas
 
 
@@ -183,45 +184,52 @@ def saveArrays(xs = None, wls_xs = None, real_xs = None):
 
 
 # Plots the error distribution of WLS and EKF estimates
-def plotError(real, wls, xs):
-    nBusAct = int(real.shape[1]/2)
-    nBus = int(xs.shape[1]/2)
+def plotError(alg, real, wls, xs):
+    nBusAct = int(real.shape[1] / 2)
+    nBus = int(xs.shape[1] / 2)
     nSim = xs.shape[0]
     time_steps = xs.shape[2]
-    real_xs = real[:nSim,:,:]
-    wls_xs = wls[:nSim,:,:]
+    real_xs = real[:nSim, :, :]
+    wls_xs = wls[:nSim, :, :]
 
     slack = -1
     # Determining the slack bus
-    for idx, row in enumerate(real_xs[0,:,:]):
+    for idx, row in enumerate(real_xs[0, :, :]):
         if np.sum(row) == 0:
             slack = idx
-     
+
     # calculating the relative errors
     # (2 * nBusAct)-1 rows because of zero error for slack bus angle
-    xs_e = np.zeros((nSim, (2 * nBusAct)-1, time_steps))
+    xs_e = np.zeros((nSim, (2 * nBusAct) - 1, time_steps))
     wls_xs_e = np.zeros((nSim, (2 * nBusAct) - 1, time_steps))
     # in some cases slack bus is first in index while in some cases last
     # voltage angle relative error calculation
     if slack == 0:
-        xs_e[:,:nBusAct-1,:] = (real_xs[:,1:nBusAct,:] - xs[:,1:nBusAct,:])*100/np.abs(real_xs[:,1:nBusAct,:])
-        wls_xs_e[:,:nBusAct-1,:] = (real_xs[:,1:nBusAct,:] - wls_xs[:,1:nBusAct,:])*100/np.abs(real_xs[:,1:nBusAct,:])
-    elif slack == (nBusAct - 1): 
-        xs_e[:,:nBusAct-1,:] = (real_xs[:,:nBusAct-1,:] - xs[:,:nBusAct-1,:])*100/np.abs(real_xs[:,:nBusAct-1,:])
-        wls_xs_e[:,:nBusAct-1,:] = (real_xs[:,:nBusAct-1,:] - wls_xs[:,:nBusAct-1,:])*100/np.abs(real_xs[:,:nBusAct-1,:])
+        xs_e[:, :nBusAct - 1, :] = (real_xs[:, 1:nBusAct, :] - xs[:, 1:nBusAct, :]) * 100 / np.abs(
+            real_xs[:, 1:nBusAct, :])
+        wls_xs_e[:, :nBusAct - 1, :] = (real_xs[:, 1:nBusAct, :] - wls_xs[:, 1:nBusAct, :]) * 100 / np.abs(
+            real_xs[:, 1:nBusAct, :])
+    elif slack == (nBusAct - 1):
+        xs_e[:, :nBusAct - 1, :] = (real_xs[:, :nBusAct - 1, :] - xs[:, :nBusAct - 1, :]) * 100 / np.abs(
+            real_xs[:, :nBusAct - 1, :])
+        wls_xs_e[:, :nBusAct - 1, :] = (real_xs[:, :nBusAct - 1, :] - wls_xs[:, :nBusAct - 1, :]) * 100 / np.abs(
+            real_xs[:, :nBusAct - 1, :])
     else:
         print("Error! Slack bus misalignment")
+
     # voltage magnitude relative error calculation
     # xs[] will also contain dummy bus estimates in the fields xs[nBusAct:nBus] and xs[nBus+nBusAct:], we need to
     # discard those while calculating errors
     # eg. nBusAct = 139 and nBus = 150, then xs[139:150] will be dummy bus angles and xs[289:] will be magnitudes
-    xs_e[:,nBusAct-1:,:] = (real_xs[:,nBusAct:,:] - xs[:,nBus:(nBus+nBusAct),:])*100/np.abs(real_xs[:,nBusAct:,:])
-    wls_xs_e[:,nBusAct-1:,:] = (real_xs[:,nBusAct:,:] - wls_xs[:,nBusAct:,:])*100/np.abs(real_xs[:,nBusAct:,:])
+    xs_e[:, nBusAct - 1:, :] = (real_xs[:, nBusAct:, :] - xs[:, nBus:(nBus + nBusAct), :]) * 100 / np.abs(
+        real_xs[:, nBusAct:, :])
+    wls_xs_e[:, nBusAct - 1:, :] = (real_xs[:, nBusAct:, :] - wls_xs[:, nBusAct:, :]) * 100 / np.abs(
+        real_xs[:, nBusAct:, :])
 
     # Plotting the errors
     plt.rcParams['figure.figsize'] = [15, 10]
-    bins = np.arange(-3,3,.05)
-    plt.hist([xs_e.ravel(),wls_xs_e.ravel()], bins=bins, color = ['g','b'], alpha =0.6, label = ['IEKF','WLS']);
+    bins = np.arange(-3, 3, .05)
+    plt.hist([xs_e.ravel(), wls_xs_e.ravel()], bins=bins, color=['g', 'b'], alpha=0.6, label=[alg, 'WLS']);
     plt.xlabel('% relative error');
     plt.ylabel('counts');
     plt.legend();
@@ -229,10 +237,10 @@ def plotError(real, wls, xs):
 
 
 # Plotting the estimated and real values of a particular state variable to see the error per timesteps
-def plotStates(num, time_steps, xs, real_xs, wls_xs):
-    # eg in case of 15 bus, 0 - 14 are bus voltage angles and 15- 29 are voltage magnitudes 
+def plotStates(alg, num, time_steps, xs, real_xs, wls_xs):
+    # eg in case of 15 bus, 0 - 14 are bus voltage angles and 15- 29 are voltage magnitudes
     plt.rcParams['figure.figsize'] = [15, 10]
-    plt.plot(time_steps[:], xs[0,num,:],'r', label='EKF');
+    plt.plot(time_steps[:], xs[0,num,:],'r', label=alg);
     plt.plot(time_steps[:], real_xs[0,num,:], 'b', label='Real');
     plt.plot(time_steps[:], wls_xs[0,num,:], 'g', label='WLS');
     plt.xlabel('time steps');
@@ -242,7 +250,6 @@ def plotStates(num, time_steps, xs, real_xs, wls_xs):
 
 
 def EKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus):
-    # creating the EKF object
     dk = ExtendedKalmanFilter(dim_x=2 * nBus, dim_z=nMeas)
     A = np.eye(2 * nBus)
     # measurement noise, R
@@ -264,7 +271,7 @@ def EKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus):
 
 # Estimate the states with iterated Extended Kalman Filter
 def estimate_EKF(dk, net, eppci, nBus, slackbus, nUpdates, s, ts):
-    # Calling prediction step of kalman filter object
+    # Calling prediction step of kalman filter aobject
     dk.predict()
 
     # Current measurements
@@ -275,25 +282,25 @@ def estimate_EKF(dk, net, eppci, nBus, slackbus, nUpdates, s, ts):
 
     # Iterating over the correction step until the difference between states is greater than threshold
     threshold = 1
+    P_trace_old = np.trace(dk.P) / dk.P.shape[0]
     while threshold > 0.0001:
         # Calling correction step of kalman filter object
         returnVal = dk.update(z, create_jac_hx, create_hx, args=(net, eppci), hx_args=(net, eppci))
 
-        if np.trace(dk.P)/dk.P.shape[1] > 1 + np.trace(dk.Q)/dk.Q.shape[1]:
-            # The S matrix will soon explode! terminate the update step
-            logging.warning('P matrix shows possible error in inverting S matrix in future!')
-            returnVal = -2
-            break
-
         # subtracting the angle of slack bus from all bus angles after correction
         dk.x[:nBus] = dk.x[:nBus] - dk.x[slackbus]
         threshold = np.abs(np.sum(dk.x_new - dk.x_old) / (2 * nBus))
-        nUpdates[s, ts] +=1
-        # In case to limit the number of update steps
-        # if nUpdates[s, ts]>9:
-        #     break
+        nUpdates[s, ts] += 1
+
+        P_trace_new = np.trace(dk.P) / dk.P.shape[0]
+        if not P_trace_new < P_trace_old:
+            break
+        P_trace_old = P_trace_new
+
+        #         if nUpdates[s, ts]>5:
+        #             break
+
         if returnVal == -1:
-            # could not invert dk.S
             break
 
     if returnVal == 0:
@@ -325,7 +332,7 @@ def estimate_UKF(ukf, net, eppci, nBus, slackbus, s, ts):
 
 def UKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus):
     # sigma points
-    sigmas = MerweScaledSigmaPoints(2*nBus, alpha=.1, beta=2., kappa=0)
+    sigmas = MerweScaledSigmaPoints(2*nBus, alpha=.1, beta=2., kappa=3-(2*nBus))
     ukf = UnscentedKalmanFilter(dim_x=2 * nBus, dim_z=nMeas, hx=create_hx, fx=stateTransUKF, points=sigmas)
     # measurement noise, R
     R = (std_pq ** 2) * np.eye(nMeas)
@@ -336,7 +343,6 @@ def UKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus):
         R[(nMeas-1)-i,(nMeas-1)-i] = (std_v_bus**2)
 
     # state vector is stored in eppci.E
-#     eppci.E = eppci.E.reshape(-1, 1)
     ukf.x = eppci.E
     ukf.R = R
     ukf.Q = Q
@@ -349,9 +355,8 @@ def stateTransUKF(x, nBus):
 
 
 # Run the estimation of states according the given profile for the given number of times
-def runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask):
-    # measurement collection dictionaries to save the bus and line power measurements in first run
-    # so that we dont need to run powerflow next run onwards
+def runSimulations(alg, nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask):
+    # measurement collection dictionaries
     bus_dict = {}
     line_dict = {}
     xs, real_xs, wls_xs, nUpdates = storingArraysInit(nSim, nBus, nBusAct, len(time_steps))
@@ -359,25 +364,25 @@ def runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bu
     for s in range(nSim):
         print(" ")
         print("Simulation: ", s)
-        # get the ppc and eppci internal datastructures
-        YMat, Yf, Yt, ppc, eppci = buildAdmittanceMat(net, init="flat", calculate_voltage_angles=False)
 
+        YMat, Yf, Yt, ppc, eppci = buildAdmittanceMat(net, init="flat", calculate_voltage_angles=False)
         if alg == "EKF":
             dk = EKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus)
         elif alg == "UKF":
             ukf = UKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus)
 
         ts = -1
-        while(ts<len(time_steps)-1):
-            ts = ts+1
-            # updating the network with the given load profile
+        while (ts < len(time_steps) - 1):
+            ts = ts + 1
+
+            # updating the network with the given load profile and creating measurements
             net.load.loc[:, 'p_mw'] = profiles[('load', 'p_mw')].loc[ts, :]
             net.load.loc[:, 'q_mvar'] = profiles[('load', 'q_mvar')].loc[ts, :]
 
             # save the measurements of the net in first run for use in the subsequent runs
             if s == 0:
                 real_state, bus_meas, line_meas = find_state_and_measurements(resultMask)
-                real_xs[s,:,ts] = real_state.ravel()
+                real_xs[s, :, ts] = real_state.ravel()
                 bus_dict[ts] = bus_meas
                 line_dict[ts] = line_meas
 
@@ -407,18 +412,19 @@ def runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bu
             if ts == 0:
                 print("Time step:", end=" ")
             print(ts, end=" , ")
-                        
+
     # copying real states for all runs of simulation
-    real_xs[1:,:,:] = real_xs[0,:,:]
+    real_xs[1:, :, :] = real_xs[0, :, :]
 
     end = datetime.now()
     print('\nruntime: {}'.format(end - start))
     return xs, real_xs, wls_xs, nUpdates
 
 
-# Retrieving sample grid from simbench
-# some example grid codes "1-MV-comm--0-sw", "1-LV-rural3--0-sw"
-sb_code = "	1-MV-urban--0-sw"
+# retrieving sample grid from simbench
+# sb_code = "1-MV-comm--0-sw"
+sb_code = "1-LV-rural3--0-sw"
+# sb_code = "1-MV-urban--0-sw"
 net = sb.get_simbench_net(sb_code)
 # in simbench sgen is positive for generation but in pandapower sgen is negative for generation
 # converting positive value to negative for use in pandapower
@@ -427,16 +433,18 @@ net.sgen.loc[:, ['p_mw', 'q_mvar']] *= -1
 # standard deviations
 std_v_bus = 0.003  # in pu
 std_pq_pu = 0.0001
+
 power_base = np.average(net.trafo.loc[:, 'sn_mva'].values)
 std_pq = std_pq_pu * power_base
 
-# drop initial measurements and create new measurements
+# drop initial measurements
 iniMeas = np.arange(0, len(net.measurement))
 net.measurement.drop(iniMeas, inplace=True)
+
 create_measurements(std_pq, std_v_bus)
 
-# get the ppc and eppci internal data structures and other grid details
 YMat, Yf, Yt, ppc, eppci = buildAdmittanceMat(net, init="flat", calculate_voltage_angles=False)
+
 nBus, nBuspp, nBusAct, nMeas, slackbus = getBusInfo(YMat, net, ppc, eppci)
 
 # get profile associated with the network
@@ -448,16 +456,23 @@ start = datetime.now()
 nSim = 1
 # for storing the states
 time_steps = range(50)
+
 resultMask = createResultMask(net, nBus, nBusAct)
 
-# Run the required number of estimations and save the array locally
-xs, real_xs, wls_xs, nUpdates = runSimulations(nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask)
+# select between EKF and UKF
+alg = "UKF"
+xs, real_xs, wls_xs, nUpdates = runSimulations(alg, nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std_v_bus, profiles, resultMask)
+
 saveArrays(xs = xs, wls_xs = wls_xs, real_xs = real_xs)
 
-# Plotting the estimated and real values of a particular state variable
-plotStates(8, time_steps, xs, real_xs, wls_xs)
-# Plotting the relative error of estimated values
-plotError(real_xs, wls_xs, xs)
+# # Plotting the estimated and real values of a particular state variable
+plotStates(alg, 10, time_steps, xs, real_xs, wls_xs)
+
+# # Plotting the relative error of estimated values
+# plotError(alg, real_xs, wls_xs, xs)
+
+
+
 
 # # loading locally saved arrays and plotting
 # real_xs = np.loadtxt('real_xs.txt')
@@ -469,4 +484,3 @@ plotError(real_xs, wls_xs, xs)
 # wls_xs = wls_xs.reshape(nSim,-1,len(time_steps))
 #
 # plotError(real_xs, wls_xs, xs)
-
