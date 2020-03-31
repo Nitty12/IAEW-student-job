@@ -309,21 +309,23 @@ def estimate_EKF(dk, net, eppci, nBus, slackbus, nUpdates, s, ts):
     return dk, eppci, returnVal
 
 
-def estimate_UKF(ukf, net, eppci, nBus, slackbus, s, ts):
+def estimate_UKF(ukf, net, eppci, nBus, slackbus, s, ts, real_xs):
     # Calling prediction step of kalman filter object
-    ukf.predict(nBus=nBus)
+    ukf.predict(ts, real_xs)
 
     # Current measurements
     z = eppci.z.reshape(-1, 1)
 
     # subtracting the angle of slack bus from all bus angles after prediction
     ukf.x[:nBus] = ukf.x[:nBus] - ukf.x[slackbus]
+    ukf.x_prior[:nBus] = ukf.x_prior[:nBus] - ukf.x_prior[slackbus]
 
     # Calling correction step of kalman filter object
     ukf.update(z, net=net, eppci=eppci)
 
     # subtracting the angle of slack bus from all bus angles after correction
     ukf.x[:nBus] = ukf.x[:nBus] - ukf.x[slackbus]
+    ukf.x_post[:nBus] = ukf.x_post[:nBus] - ukf.x_post[slackbus]
 
     # saving the current estimated states and real states
     eppci.E = ukf.x.ravel()
@@ -346,12 +348,20 @@ def UKF_init(net, eppci, nBus, nMeas, std_pq, std_v_bus):
     ukf.x = eppci.E
     ukf.R = R
     ukf.Q = Q
+
+    # parameters for Holt's double exponential smoothing
+    ukf.alpha = 0.8
+    ukf.beta = 0.5
+    ukf.F = ukf.alpha * (1 + ukf.beta) * ukf.F
     return ukf
 
 
-def stateTransUKF(x, nBus):
-    F = np.eye(2 * nBus)
-    return np.dot(F, x)
+def stateTransUKF(x_k, F, g):
+    I = np.eye(F.shape[0])
+    return np.dot(I, x_k)
+    # In case you want to test with Holt's double linear exponential smoothing
+    # Now it is diverging
+    # return np.dot(F, x_k) + g
 
 
 # Run the estimation of states according the given profile for the given number of times
@@ -403,7 +413,7 @@ def runSimulations(alg, nSim, time_steps, net, nBus, nBusAct, nMeas, std_pq, std
 
             elif alg == "UKF":
                 # UKF estimation
-                ukf, eppci = estimate_UKF(ukf, net, eppci, nBus, slackbus, s, ts)
+                ukf, eppci = estimate_UKF(ukf, net, eppci, nBus, slackbus, s, ts, real_xs[0, :, ts])
 
             xs[s, :, ts] = eppci.E
             # converting radians to degrees
