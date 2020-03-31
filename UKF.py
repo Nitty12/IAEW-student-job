@@ -309,13 +309,6 @@ class UnscentedKalmanFilter(object):
         self.fx = fx
         self.x_mean = x_mean_fn
         self.z_mean = z_mean_fn
-        # edited by Nitty
-        self.a_k = zeros(dim_x)
-        self.b_k = zeros(dim_x)
-        self.a_k_prev = zeros(dim_x)
-        self.b_k_prev = zeros(dim_x)
-        self.F = np.eye(dim_x)
-        self.g = zeros(dim_x)
 
         # Only computed only if requested via property
         self._log_likelihood = log(sys.float_info.min)
@@ -362,7 +355,7 @@ class UnscentedKalmanFilter(object):
         self.x_post = self.x.copy()
         self.P_post = self.P.copy()
 
-    def predict(self, ts, real_xs,  dt=None, UT=None, fx=None, **fx_args):
+    def predict(self, dt=None, UT=None, fx=None, **fx_args):
         r"""
         Performs the predict step of the UKF. On return, self.x and
         self.P contain the predicted state (x) and covariance (P). '
@@ -400,18 +393,15 @@ class UnscentedKalmanFilter(object):
         # calculate sigma points for given mean and covariance
         # self.compute_process_sigmas(dt, fx, **fx_args)
         # edited by Nitty
-        self.compute_process_sigmas(ts, real_xs, fx=fx, **fx_args)
+        self.compute_process_sigmas(fx, **fx_args)
 
-        # and pass sigmas through the unscented transform to compute prior
+        #and pass sigmas through the unscented transform to compute prior
         self.x, self.P = UT(self.sigmas_f, self.Wm, self.Wc, self.Q,
                             self.x_mean, self.residual_x)
 
         # save prior
         self.x_prior = np.copy(self.x)
         self.P_prior = np.copy(self.P)
-
-        self.a_k_prev = self.a_k
-        self.b_k_prev = self.b_k
 
     def update(self, z, R=None, UT=None, hx=None, **hx_args):
         """
@@ -507,7 +497,7 @@ class UnscentedKalmanFilter(object):
 
     # def compute_process_sigmas(self, dt, fx=None, **fx_args):
     # edited by Nitty
-    def compute_process_sigmas(self, ts, real_xs, dt = None, fx=None, **fx_args):
+    def compute_process_sigmas(self, dt = None, fx=None, **fx_args):
         """
         computes the values of sigmas_f. Normally a user would not call
         this, but it is useful if you need to call update more than once
@@ -521,31 +511,11 @@ class UnscentedKalmanFilter(object):
 
         # calculate sigma points for given mean and covariance
         sigmas = self.points_fn.sigma_points(self.x, self.P)
-        # edited by Nitty
-        # for computing the Holt’s linear exponential smoothing coefficients
-        # self.compute_g(ts, real_xs)
+
         for i, s in enumerate(sigmas):
             # self.sigmas_f[i] = fx(s, dt, **fx_args)
             # edited by Nitty
-            self.sigmas_f[i] = fx(s, self.F, self.g, **fx_args)
-
-    # edited by Nitty
-    # for computing the Holt’s linear exponential smoothing coefficients
-    # first 2 timesteps is used to initialize the values from the real states
-    # currently, the implementation is not converging
-    def compute_g(self, ts, real_xs):
-        real = np.zeros(self.a_k.shape)
-        real[:real_xs.shape[0]] = real_xs
-        if ts == 0:
-            # initialization
-            self.a_k = real
-        elif ts == 1:
-            # initialization
-            self.b_k = (real - self.a_k)
-        else:
-            self.a_k = self.alpha * self.x_post + (1 - self.alpha) * self.x_prior
-            self.b_k = self.beta * (self.a_k - self.a_k_prev) + (1 - self.beta) * self.b_k_prev
-            self.g = (1 + self.beta) * (1 - self.alpha) * self.x_prior - self.beta * self.a_k_prev + (1 - self.beta) * self.b_k_prev
+            self.sigmas_f[i] = fx(s, **fx_args)
 
     def batch_filter(self, zs, Rs=None, dts=None, UT=None, saver=None):
         """
